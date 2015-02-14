@@ -1244,7 +1244,8 @@ const char* parse_simpleexpr(const char *p)
 			safestrncpy(line,line_start,k);
 			
 			normalize_name(line, "\r\n\t ");
-			fprintf(script->lang_export_fp,"\"%s\" = \"\" //%s\n",my_str,line);
+			//fprintf(script->lang_export_fp,"\"%s\" = \"\" //%s\n",my_str,line);
+			fprintf(script->lang_export_fp,"\"%s\" = \"A %s\" //%s\n",my_str,my_str,line); //DEBUG
 		}
 		
 	} else {
@@ -4526,6 +4527,112 @@ void do_final_script(void) {
 	if( script->generic_ui_array )
 		aFree(script->generic_ui_array);
 }
+
+/**
+ * Test Language Parser
+ * TODO Improve error feedback
+ **/
+void test_lp(void) {
+	char line[1024];
+	char entry[1024], new_entry[1024];//TODO shouldn't use this
+	FILE *fp;
+	size_t line_count = 0, translation_count = 0;
+	DBMap *npcname2translations, *current_db;// awful names
+	char current_npc_name[NAME_LENGTH*2+1] = { 0 };
+	size_t i, j;
+	int64 start_tick = timer->gettick();
+	
+	if( !(fp = fopen("./lang_exported.txt","rb")) ) {
+		ShowError("failed to open '%s' for reading\n","./lang_exported.txt");
+		return;
+	}
+	
+	npcname2translations = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
+	/**
+	 * npcname2translations
+	 *		( npc_name -> translationDBMap )
+	 *		translationDBMap
+	 *				( original_string -> translation_string )
+	 **/
+	
+	while(fgets(line, sizeof(line), fp)) {
+		size_t len = strlen(line);
+		
+//		if( line_count >= 30 )//debug
+//			break;
+		
+		if( len <= 1 )
+			continue;
+		
+		if( line[0] == '/' && line[1] == '/' )
+			continue;
+		
+		if( strncasecmp(line,"NPC:",4) == 0 ) {//TODO npc name format in the file is incorrect. (has ::stuff and all)
+			//ShowDebug("Found NPC: in '%s'\n",line);
+			
+			for(i = 4; i < len; i++) {
+				if( line[i] == '/' )
+					break;
+			}
+			
+			if( i == len ) {
+				ShowError("Invalid format\n");
+			} else {
+				safestrncpy(current_npc_name, line + 4, i - 4);
+				normalize_name(current_npc_name, " ");
+				current_db = NULL;
+				//ShowInfo("Detected name: '%s'\n",current_npc_name);
+			}
+		} else if ( line[0] == '\"' ) {
+			for(i = 1; i < len - 6; i++) {
+				if( strncasecmp((char*)line+i,"\" = \"",5) == 0 ) { //This isn't 100% safe, need harunas parser wisdom
+					break;
+				}
+			}
+			
+			if( i == len - 6 ) {
+				ShowError("Invalid format: %s\n",line);
+			} else {
+				safestrncpy(entry, line + 1, i);
+				//ShowInfo("Detected Original: '%s'\n",entry);
+				
+				if( strncasecmp((char*)line+i+4, "\"\"", 2) == 0 ) {
+					;
+					//ShowDebug("no translation for this entry\n");
+				} else {
+					for(j = i + 5; j < len - 1; j++) {
+						if( strncasecmp((char*)line+j, "\" //", 4) == 0 ) {  //This isn't 100% safe, need harunas parser wisdom
+							break;
+						}
+					}
+					
+					if( j == len - 1 ) {
+						ShowError("Invalid format: %s\n",line);
+					} else {
+						safestrncpy(new_entry, line + i + 5, j - (i + 4) );
+						//ShowInfo("Detected Translation: '%s'\n",new_entry);
+						
+						if( !current_db ) {
+							current_db = strdb_alloc(DB_OPT_DUP_KEY, 0);
+							strdb_put(npcname2translations, current_npc_name, current_db);
+						}
+						
+						strdb_put(current_db, entry, aStrdup(new_entry));
+						translation_count++;
+					}
+				}
+			}
+		}
+		
+		line_count++;
+	}
+	
+	ShowDebug("Debug npcname2translations entries: %u (within %u npcs)\n",(uint32)translation_count, db_size(npcname2translations));
+	ShowDebug("Operation Performed in: %d\n",(int)(timer->gettick() - start_tick));
+	
+	fclose(fp);
+}
+
 /*==========================================
  * Initialization
  *------------------------------------------*/
@@ -4549,6 +4656,8 @@ void do_init_script(bool minimal) {
 		return;
 
 	mapreg->init();
+	
+	test_lp();
 }
 
 int script_reload(void) {
