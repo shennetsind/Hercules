@@ -379,6 +379,7 @@ struct script_code {
 	unsigned char *script_buf;
 	struct reg_db local; ///< Local (npc) vars
 	unsigned short instances;
+	DBMap *strings; // All "strings" in this script are stored here ( str => struct script_code_str )
 };
 
 struct script_stack {
@@ -464,6 +465,9 @@ struct script_syntax_data {
 	} curly[256]; // Information right parenthesis
 	int curly_count; // The number of right brackets
 	int index; // Number of the syntax used in the script
+	int last_func; // buildin index of the last parsed function
+	DBMap *strings; // string map parsed (is later passed to script_code)
+	bool first_entry; // First time this npc is written to file? flag
 };
 
 struct casecheck_data {
@@ -483,6 +487,13 @@ struct script_array {
 	unsigned int id;/* the first 32b of the 64b uid, aka the id */
 	unsigned int size;/* how many members */
 	unsigned int *members;/* member list */
+};
+
+struct script_code_str {
+	char *ptr;
+	struct {
+		unsigned int translations : 1;
+	} flag;
 };
 
 /**
@@ -518,6 +529,10 @@ struct script_interface {
 	/* */
 	char *word_buf;
 	size_t word_size;
+	/* Script string storage */
+	char *string_list;
+	unsigned int string_list_size;
+	unsigned int string_list_pos;
 	/*  */
 	unsigned short current_item_id;
 	/* */
@@ -564,6 +579,12 @@ struct script_interface {
 	/* */
 	unsigned int *generic_ui_array;
 	unsigned int generic_ui_array_size;
+	/* Set during startup when attempting to export the lang, unset after server initialization is over */
+	FILE *lang_export_fp;
+	/* set and unset on npc_parse_script */
+	char *parser_current_npc_name;
+	/* */
+	int buildin_mes_offset;
 	/*  */
 	void (*init) (bool minimal);
 	void (*final) (void);

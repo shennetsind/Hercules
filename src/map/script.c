@@ -778,6 +778,11 @@ const char* parse_callfunc(const char* p, int require_paren, int is_custom)
 		// buildin function
 		script->addl(func);
 		script->addc(C_ARG);
+		
+		/** only when unset (-1), valid values are >= 0 **/
+		if( script->syntax.last_func == -1 )
+			script->syntax.last_func = script->str_data[func].val;
+		
 		arg = script->buildin[script->str_data[func].val];
 		if (script->str_data[func].deprecated)
 			DeprecationWarning(p);
@@ -1090,6 +1095,25 @@ bool is_number(const char *p) {
 	return false;
 }
 
+/**
+ * Saves a gazillion in system overhead from all the individual allocs it'd consume otherwise
+ * TODO this needs to be cleared up on reload/shtudown
+ **/
+char *script_string_dup(char *str) {
+	size_t len = strlen(str);
+ 
+	while( script->string_list_pos+len+1 >= script->string_list_size ) {
+		script->string_list_size += 10240;
+		RECREATE(script->string_list,char,script->string_list_size);
+		memset(script->string_list + (script->string_list_size - 10240), '\0', 10240);
+	}
+	
+	safestrncpy(script->string_list+script->string_list_pos, str, len+1);
+	script->string_list_pos += len+1;
+	
+	return (char*)script->string_list + (script->string_list_pos - (len + 1));
+}
+
 /*==========================================
  * Analysis section
  *------------------------------------------*/
@@ -1133,6 +1157,13 @@ const char* parse_simpleexpr(const char *p)
 		script->addi((int)lli); // Cast is safe, as it's already been checked for overflows
 		p=np;
 	} else if(*p=='"') {
+		//Variable names are not final over here
+		char my_str[1024] = { 0 };//TODO Shouldnt' use this, get start address, end address and boom. need reusable buffer
+		int my_idx = 0;
+		char *start_point = (char*)p;
+		struct script_code_str *sct = NULL;
+		bool duplicate = false;
+		
 		script->addc(C_STR);
 		do {
 			p++;
@@ -1144,19 +1175,78 @@ const char* parse_simpleexpr(const char *p)
 					if( n != 1 )
 						ShowDebug("parse_simpleexpr: unexpected length %d after unescape (\"%.*s\" -> %.*s)\n", (int)n, (int)len, p, (int)n, buf);
 					p += len;
-					script->addb(*buf);
+					if( my_idx < sizeof(my_str) )
+						my_str[my_idx++] = *buf;
 					continue;
 				} else if( *p == '\n' ) {
 					disp_error_message("parse_simpleexpr: unexpected newline @ string",p);
 				}
-				script->addb(*p++);
+				if( my_idx < sizeof(my_str) )
+					my_str[my_idx++] = *p++;
 			}
 			if(!*p)
 				disp_error_message("parse_simpleexpr: unexpected end of file @ string",p);
 			p++; //'"'
 			p = script->skip_space(p);
 		} while( *p && *p == '"' );
-		script->addb(0);
+		
+		if( my_idx ) {
+			if( !script->syntax.strings ) {
+				script->syntax.strings = strdb_alloc(DB_OPT_RELEASE_DATA, 0);
+			}
+			
+			if( !(sct = strdb_get(script->syntax.strings,my_str)) ) {
+				CREATE(sct, struct script_code_str, 1);
+				
+				sct->ptr = script_string_dup(my_str);
+				
+				strdb_put(script->syntax.strings,sct->ptr,sct);
+			} else
+				duplicate = true;
+		}
+		
+		if( script->pos+sizeof(char*) >= script->size ) {
+			script->size += SCRIPT_BLOCK_SIZE;
+			RECREATE(script->buf,unsigned char,script->size);
+		}
+		
+		*((struct script_code_str **)(&script->buf[script->pos])) = sct;
+		script->pos += sizeof(char*);
+
+		
+		if( script->lang_export_fp && !duplicate && script->syntax.last_func == script->buildin_mes_offset ) {
+			char line[512] = { 0 };//TODO shouldn't use this, need reusable buffer
+			int k;
+			char *line_start = start_point;
+			char *line_end = start_point;
+
+			if( !script->syntax.first_entry ) {
+				fprintf(script->lang_export_fp,"\nNPC:%s //%s\n\n",
+						script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC",
+						script->parser_current_file ? script->parser_current_file : "Unknown File"
+				);
+				script->syntax.first_entry = true;
+			}
+			
+			while( line_start > script->parser_current_src ) {
+				if( *line_start != '\n' )
+					line_start--;
+				else
+					break;
+			}
+			
+			while( *line_end != '\n' && *line_end != '\0' )
+				line_end++;
+			
+			k = (int)(line_end - line_start);
+			if( k > sizeof(line) )
+				k = 511;
+			safestrncpy(line,line_start,k);
+			
+			normalize_name(line, "\r\n\t ");
+			fprintf(script->lang_export_fp,"\"%s\" = \"\" //%s\n",my_str,line);
+		}
+		
 	} else {
 		int l;
 		const char* pv;
@@ -1336,6 +1426,8 @@ const char* parse_line(const char* p)
 	} else {
 		if( *p != ';' )
 			disp_error_message("parse_line: need ';'",p);
+		/* we set it back after a semi colon so that we can know when concat'd stuff ends */
+		script->syntax.last_func = -1;
 	}
 
 	//Binding decision for if(), for(), while()
@@ -2228,6 +2320,7 @@ struct script_code* parse_script(const char *src,const char *file,int line,int o
 		return NULL;// empty script
 
 	memset(&script->syntax,0,sizeof(script->syntax));
+	script->syntax.last_func = -1;/* as valid values are >= 0 */
 
 	script->buf=(unsigned char *)aMalloc(SCRIPT_BLOCK_SIZE*sizeof(unsigned char));
 	script->pos=0;
@@ -2416,6 +2509,7 @@ struct script_code* parse_script(const char *src,const char *file,int line,int o
 	CREATE(code,struct script_code,1);
 	code->script_buf  = script->buf;
 	code->script_size = script->size;
+	code->strings = script->syntax.strings;
 	code->local.vars = NULL;
 	code->local.arrays = NULL;
 #ifdef ENABLE_CASE_CHECK
@@ -3207,6 +3301,8 @@ void script_free_code(struct script_code* code)
 		if( code->local.arrays )
 			code->local.arrays->destroy(code->local.arrays,script->array_free_db);
 	}
+	if( code->strings )
+		db_destroy(code->strings);
 	aFree( code->script_buf );
 	aFree( code );
 }
@@ -4005,8 +4101,13 @@ void run_script_main(struct script_state *st) {
 				script->push_val(stack,c,0,NULL);
 				break;
 			case C_STR:
-				script->push_str(stack,C_CONSTSTR,(char*)(st->script->script_buf+st->pos));
-				while(st->script->script_buf[st->pos++]);
+			{
+				struct script_code_str *sct = (struct script_code_str*)(st->script->script_buf+st->pos);
+				//TODO I have no idea what this is going to do if someone passes "" (empty) as a param (TEST)
+				if( sct )
+					script->push_str(stack,C_CONSTSTR,sct->ptr);
+				st->pos += (sizeof(char*) - 1);
+			}
 				break;
 			case C_FUNC:
 				script->run_func(st);
@@ -19110,6 +19211,7 @@ bool script_add_builtin(const struct script_function *buildin, bool override) {
 		else if( strcmp(buildin->name, "callsub") == 0 ) script->buildin_callsub_ref = n;
 		else if( strcmp(buildin->name, "callfunc") == 0 ) script->buildin_callfunc_ref = n;
 		else if( strcmp(buildin->name, "getelementofarray") == 0 ) script->buildin_getelementofarray_ref = n;
+		else if( strcmp(buildin->name, "mes") == 0 ) script->buildin_mes_offset = script->buildin_count;
 
 		offset = script->buildin_count;
 

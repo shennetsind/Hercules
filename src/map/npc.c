@@ -2924,7 +2924,13 @@ const char* npc_parse_script(char* w1, char* w2, char* w3, char* w4, const char*
 	if( end == NULL )
 		return NULL;// (simple) parse error, don't continue
 
+	
+	script->parser_current_npc_name = w3;
+	
 	scriptroot = script->parse(script_start, filepath, strline(buffer,script_start-buffer), SCRIPT_USE_LABEL_DB, retval);
+
+	script->parser_current_npc_name = NULL;
+	
 	label_list = NULL;
 	label_list_num = 0;
 	if( script->label_count ) {
@@ -3435,7 +3441,12 @@ const char* npc_parse_function(char* w1, char* w2, char* w3, char* w4, const cha
 	if( end == NULL )
 		return NULL;// (simple) parse error, don't continue
 
+	script->parser_current_npc_name = w3;
+
 	scriptroot = script->parse(script_start, filepath, strline(buffer,start-buffer), SCRIPT_RETURN_EMPTY_SCRIPT, retval);
+
+	script->parser_current_npc_name = NULL;
+	
 	if( scriptroot == NULL )// parse error, continue
 		return end;
 
@@ -4592,7 +4603,17 @@ int do_init_npc(bool minimal) {
 	if (!minimal) {
 		npc->timer_event_ers = ers_new(sizeof(struct timer_event_data),"clif.c::timer_event_ers",ERS_OPT_NONE);
 
+		if( 1 ) {//TODO Whatever flag is set to export the dialog
+			if( !(script->lang_export_fp = fopen("./lang_exported.txt","wb")) ) {
+				ShowError("do_init_npc: failed to open '%s' for writing\n","./lang_exported.txt");
+			}
+		}
 		npc_process_files(START_NPC_NUM);
+		
+		if( script->lang_export_fp ) {
+			fclose(script->lang_export_fp);
+			script->lang_export_fp = NULL;
+		}
 	}
 	
 	if (!minimal) {
