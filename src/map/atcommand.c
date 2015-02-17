@@ -9312,6 +9312,42 @@ ACMD(cddebug) {
 	
 	return true;
 }
+
+/**
+ *
+ **/
+ACMD(lang) {
+	uint8 i;
+	
+	if( !message || !*message ) {
+		clif->messages(fd,"Usage: @%s <Language>",info->command);
+		clif->messages(fd,"There are %d languages available:",script->max_lang_id);
+		for(i = 0; i < script->max_lang_id; i++)
+			clif->messages(fd,"- %s",script->languages[i]);
+		return false;
+	}
+	
+	for(i = 0; i < script->max_lang_id; i++) {
+		if( strcmpi(message,script->languages[i]) == 0 ) {
+			if( i == sd->lang_id ) {
+				clif->messages(fd,"%s is already set as your language",script->languages[i]);
+			} else {
+				clif->messages(fd,"Your language has been changed from '%s' to '%s'",script->languages[sd->lang_id],script->languages[i]);
+				sd->lang_id = i;
+			}
+			break;
+		}
+	}
+	
+	if( i == script->max_lang_id ) {
+		clif->messages(fd,"'%s' did not match any language available",message);
+		clif->messages(fd,"There are %d languages available:",script->max_lang_id);
+		for(i = 0; i < script->max_lang_id; i++)
+			clif->messages(fd,"- %s",script->languages[i]);
+	}
+	
+	return true;
+}
 /**
  * Fills the reference of available commands in atcommand DBMap
  **/
@@ -9582,6 +9618,7 @@ void atcommand_basecommands(void) {
 		ACMD_DEF(costume),
 		ACMD_DEF(skdebug),
 		ACMD_DEF(cddebug),
+		ACMD_DEF(lang),
 	};
 	int i;
 

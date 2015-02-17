@@ -2367,6 +2367,9 @@ struct script_code* parse_script(const char *src,const char *file,int line,int o
 		script->parse_cleanup_timer_id = timer->add(timer->gettick() + 10, script->parse_cleanup_timer, 0, 0);
 	}
 	
+	if( script->syntax.strings ) /* used only when generating translation file */
+		db_destroy(script->syntax.strings);
+	
 	memset(&script->syntax,0,sizeof(script->syntax));
 	script->syntax.last_func = -1;/* as valid values are >= 0 */
 	if( script->parser_current_npc_name ) {
@@ -4606,8 +4609,23 @@ void do_final_script(void) {
 	
 	if( script->translation_db )
 		db_destroy(script->translation_db);
+	
+	if( script->syntax.strings ) /* used only when generating translation file */
+		db_destroy(script->syntax.strings);
 }
 
+/**
+ *
+ **/
+uint8 script_add_language(char *name) {
+	uint8 lang_id = script->max_lang_id;
+	
+	RECREATE(script->languages, char *, ++script->max_lang_id);
+	
+	script->languages[lang_id] = aStrdup(name);
+	
+	return lang_id;
+}
 /**
  * Goes thru db/translations.conf file
  **/
@@ -4620,6 +4638,16 @@ void script_load_translations(void) {
 	uint8 lang_id = 0;
 	
 	script->translation_db = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
+	
+	if( script->languages ) {
+		for(i = 0; i < script->max_lang_id; i++)
+			aFree(script->languages[i]);
+		aFree(script->languages);
+	}
+	script->languages = NULL;
+	script->max_lang_id = 0;
+	
+	script->add_language("English");/* 0 is default, which is whatever is in the npc files hardcoded (in our case, English) */
 	
 	if (libconfig->read_file(&translations_conf, config_filename)) {
 		ShowError("load_translations: can't read '%s'\n", config_filename);
@@ -4674,6 +4702,30 @@ void script_load_translations(void) {
 }
 
 /**
+ *
+ **/
+char * script_get_translation_file_name(const char *file) {
+	static char file_name[200];
+	int i, len = (int)strlen(file), last_bar = -1, last_dot = -1;
+	
+	for(i = 0; i < len; i++) {
+		if( file[i] == '/' || file[i] == '\\' )
+			last_bar = i;
+		else if ( file[i] == '.' )
+			last_dot = i;
+	}
+	
+	if( last_bar != -1 || last_dot != -1 ) {
+		if( last_bar != -1 && last_dot < last_bar )
+			last_dot = -1;
+		safestrncpy(file_name, file+(last_bar >= 0 ? last_bar+1 : 0), ( last_dot >= 0 ? (len - last_bar) + last_dot - 1 : sizeof(file_name) ));
+		return file_name;
+	}
+	
+	return (char*)file;
+}
+
+/**
  * Parses a individual translation file
  **/
 void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
@@ -4690,6 +4742,8 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 		ShowError("load_translation: failed to open '%s' for reading\n",file);
 		return;
 	}
+	
+	script->add_language(script->get_translation_file_name(file));
 	
 	while(fgets(line, sizeof(line), fp)) {
 		size_t len = strlen(line), cursor = 0;
@@ -4775,7 +4829,8 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
  *
  **/
 void script_clear_translations(bool reload) {
-	
+	uint32 i;
+
 	if( script->string_list )
 		aFree(script->string_list);
 	
@@ -4784,8 +4839,6 @@ void script_clear_translations(bool reload) {
 	script->string_list_size = 0;
 	
 	if( script->translation_buf ) {
-		uint32 i;
-		
 		for(i = 0; i < script->translation_buf_size; i++) {
 			aFree(script->translation_buf[i]);
 		}
@@ -4794,6 +4847,14 @@ void script_clear_translations(bool reload) {
 	
 	script->translation_buf = NULL;
 	script->translation_buf_size = 0;
+	
+	if( script->languages ) {
+		for(i = 0; i < script->max_lang_id; i++)
+			aFree(script->languages[i]);
+		aFree(script->languages);
+	}
+	script->languages = NULL;
+	script->max_lang_id = 0;
 	
 	if( script->translation_db ) {
 		script->translation_db->clear(script->translation_db,script->translation_db_destroyer);
@@ -4834,6 +4895,9 @@ int script_parse_cleanup_timer(int tid, int64 tick, int id, intptr_t data) {
 		script->translation_db = NULL;
 	}
 	
+	if( script->syntax.strings ) /* used only when generating translation file */
+		db_destroy(script->syntax.strings);
+
 	script->parse_cleanup_timer_id = INVALID_TIMER;
 	
 	return 0;
@@ -20474,5 +20538,7 @@ void script_defaults(void) {
 	script->translation_db_destroyer = script_translation_db_destroyer;
 	script->clear_translations = script_clear_translations;
 	script->parse_cleanup_timer = script_parse_cleanup_timer;
+	script->add_language = script_add_language;
+	script->get_translation_file_name = script_get_translation_file_name;
 	
 }

@@ -599,6 +599,9 @@ struct script_interface {
 	char **translation_buf;/*  */
 	uint32 translation_buf_size;
 	/* */
+	char **languages;
+	uint8 max_lang_id;
+	/* */
 	int parse_cleanup_timer_id;
 	/*  */
 	void (*init) (bool minimal);
@@ -754,6 +757,8 @@ struct script_interface {
 	int (*translation_db_destroyer) (DBKey key, DBData *data, va_list ap);
 	void (*clear_translations) (bool reload);
 	int (*parse_cleanup_timer) (int tid, int64 tick, int id, intptr_t data);
+	uint8 (*add_language) (char *name);
+	char *(*get_translation_file_name) (const char *file);
 };
 
 struct script_interface *script;
