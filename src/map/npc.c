@@ -4603,11 +4603,6 @@ int do_init_npc(bool minimal) {
 	if (!minimal) {
 		npc->timer_event_ers = ers_new(sizeof(struct timer_event_data),"clif.c::timer_event_ers",ERS_OPT_NONE);
 
-		if( 1 ) {//TODO Whatever flag is set to export the dialog
-			if( !(script->lang_export_fp = fopen("./lang_exported.txt","wb")) ) {
-				ShowError("do_init_npc: failed to open '%s' for writing\n","./lang_exported.txt");
-			}
-		}
 		npc_process_files(START_NPC_NUM);
 		
 		if( script->lang_export_fp ) {

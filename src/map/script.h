@@ -380,7 +380,6 @@ struct script_code {
 	unsigned char *script_buf;
 	struct reg_db local; ///< Local (npc) vars
 	unsigned short instances;
-	DBMap *strings; // All "strings" in this script are stored here ( str => struct script_code_str )
 };
 
 struct script_stack {
@@ -469,7 +468,7 @@ struct script_syntax_data {
 	int last_func; // buildin index of the last parsed function
 	unsigned int nested_call; //Dont really know what to call this
 	bool lang_macro_active;
-	DBMap *strings; // string map parsed (is later passed to script_code)
+	DBMap *strings; // string map parsed (used when exporting strings only)
 	DBMap *translation_db; //non-null if this npc has any translated strings to be linked
 };
 
@@ -498,6 +497,7 @@ struct script_code_str {
 };
 
 struct string_translation {
+	int string_id;
 	uint8 translations;
 	unsigned int len;
 	char *buf;
@@ -588,6 +588,7 @@ struct script_interface {
 	unsigned int generic_ui_array_size;
 	/* Set during startup when attempting to export the lang, unset after server initialization is over */
 	FILE *lang_export_fp;
+	char *lang_export_file;/* for lang_export_fp */
 	/* set and unset on npc_parse_script */
 	char *parser_current_npc_name;
 	/* */
@@ -595,6 +596,10 @@ struct script_interface {
 	int buildin_lang_macro_offset;
 	/* */
 	DBMap *translation_db;/* npc_name => DBMap (strings) */
+	char **translation_buf;/*  */
+	uint32 translation_buf_size;
+	/* */
+	int parse_cleanup_timer_id;
 	/*  */
 	void (*init) (bool minimal);
 	void (*final) (void);
@@ -743,6 +748,12 @@ struct script_interface {
 	/* */
 	void (*hardcoded_constants) (void);
 	unsigned short (*mapindexname2id) (struct script_state *st, const char* name);
+	int (*string_dup) (char *str);
+	void (*load_translations) (void);
+	void (*load_translation) (const char *file, uint8 lang_id, uint32 *total);
+	int (*translation_db_destroyer) (DBKey key, DBData *data, va_list ap);
+	void (*clear_translations) (bool reload);
+	int (*parse_cleanup_timer) (int tid, int64 tick, int id, intptr_t data);
 };
 
 struct script_interface *script;
