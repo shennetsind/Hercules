@@ -91,6 +91,7 @@ const char* script_op2name(int op) {
 	RETURN_OP_NAME(C_USERFUNC_POS);
 
 	RETURN_OP_NAME(C_REF);
+	RETURN_OP_NAME(C_LSTR);
 
 	// operators
 	RETURN_OP_NAME(C_OP3);
@@ -771,17 +772,29 @@ const char* parse_callfunc(const char* p, int require_paren, int is_custom)
 	char *arg = NULL;
 	char null_arg = '\0';
 	int func;
+	bool nested_call = false, macro = false;
 
 	// is need add check for arg null pointer below?
 	func = script->add_word(p);
 	if( script->str_data[func].type == C_FUNC ) {
-		// buildin function
-		script->addl(func);
-		script->addc(C_ARG);
-		
 		/** only when unset (-1), valid values are >= 0 **/
 		if( script->syntax.last_func == -1 )
 			script->syntax.last_func = script->str_data[func].val;
+		else { //Nested function call
+			script->syntax.nested_call++;
+			nested_call = true;
+			
+			if( script->str_data[func].val == script->buildin_lang_macro_offset ) {
+				script->syntax.lang_macro_active = true;
+				macro = true;
+			}
+		}
+		
+		if( !macro ) {
+			// buildin function
+			script->addl(func);
+			script->addc(C_ARG);
+		}
 		
 		arg = script->buildin[script->str_data[func].val];
 		if (script->str_data[func].deprecated)
@@ -866,8 +879,16 @@ const char* parse_callfunc(const char* p, int require_paren, int is_custom)
 		if( *p != ')' )
 			disp_error_message("parse_callfunc: expected ')' to close argument list",p);
 		++p;
+		
+		if( script->str_data[func].val == script->buildin_lang_macro_offset )
+			script->syntax.lang_macro_active = false;
 	}
-	script->addc(C_FUNC);
+	
+	if( nested_call )
+		script->syntax.nested_call--;
+	
+	if( !macro )
+		script->addc(C_FUNC);
 	return p;
 }
 
@@ -1100,18 +1121,21 @@ bool is_number(const char *p) {
  * TODO this needs to be cleared up on reload/shtudown
  **/
 char *script_string_dup(char *str) {
+	/* TODO this is not working for some reason O__O~ (after parse I get lots o f????????) */
 	size_t len = strlen(str);
+	int pos = script->string_list_pos;
  
-	while( script->string_list_pos+len+1 >= script->string_list_size ) {
+	while( pos+len+1 >= script->string_list_size ) {
 		script->string_list_size += 10240;
 		RECREATE(script->string_list,char,script->string_list_size);
 		memset(script->string_list + (script->string_list_size - 10240), '\0', 10240);
 	}
 	
-	safestrncpy(script->string_list+script->string_list_pos, str, len+1);
+	safestrncpy(script->string_list+pos, str, len+1);
 	script->string_list_pos += len+1;
 	
-	return (char*)script->string_list + (script->string_list_pos - (len + 1));
+	//return (char*)script->string_list + pos;
+	return aStrdup(str);
 }
 
 /*==========================================
@@ -1159,12 +1183,11 @@ const char* parse_simpleexpr(const char *p)
 	} else if(*p=='"') {
 		//Variable names are not final over here
 		char my_str[1024] = { 0 };//TODO Shouldnt' use this, get start address, end address and boom. need reusable buffer
-		int my_idx = 0;
+		int my_idx = 0, k;
+		struct string_translation *st = NULL;
 		char *start_point = (char*)p;
-		struct script_code_str *sct = NULL;
-		bool duplicate = false;
+		bool duplicate = true;
 		
-		script->addc(C_STR);
 		do {
 			p++;
 			while( *p && *p != '"' ) {
@@ -1175,13 +1198,13 @@ const char* parse_simpleexpr(const char *p)
 					if( n != 1 )
 						ShowDebug("parse_simpleexpr: unexpected length %d after unescape (\"%.*s\" -> %.*s)\n", (int)n, (int)len, p, (int)n, buf);
 					p += len;
-					if( my_idx < sizeof(my_str) )
+					if( my_idx < sizeof(my_str) - 1 )
 						my_str[my_idx++] = *buf;
 					continue;
 				} else if( *p == '\n' ) {
 					disp_error_message("parse_simpleexpr: unexpected newline @ string",p);
 				}
-				if( my_idx < sizeof(my_str) )
+				if( my_idx < sizeof(my_str) - 1 )
 					my_str[my_idx++] = *p++;
 			}
 			if(!*p)
@@ -1190,7 +1213,19 @@ const char* parse_simpleexpr(const char *p)
 			p = script->skip_space(p);
 		} while( *p && *p == '"' );
 		
-		if( my_idx ) {
+		if( !(script->syntax.translation_db && (st = strdb_get(script->syntax.translation_db, my_str))) ) {
+			script->addc(C_STR);
+			for(k = 0; k < my_idx; k++)
+				script->addb(my_str[k]);
+			script->addb(0);
+		} else {
+			struct script_code_str *sct = NULL;
+			int expand = sizeof(char*);
+			unsigned char j;
+			unsigned int st_cursor = 0;
+
+			script->addc(C_LSTR);
+		
 			if( !script->syntax.strings ) {
 				script->syntax.strings = strdb_alloc(DB_OPT_RELEASE_DATA, 0);
 			}
@@ -1201,33 +1236,49 @@ const char* parse_simpleexpr(const char *p)
 				sct->ptr = script_string_dup(my_str);
 				
 				strdb_put(script->syntax.strings,sct->ptr,sct);
-			} else
-				duplicate = true;
-		}
-		
-		if( script->pos+sizeof(char*) >= script->size ) {
-			script->size += SCRIPT_BLOCK_SIZE;
-			RECREATE(script->buf,unsigned char,script->size);
-		}
-		
-		*((struct script_code_str **)(&script->buf[script->pos])) = sct;
-		script->pos += sizeof(char*);
 
+				duplicate = false;
+			}
+			
+			sct->translations = st->translations;
+			expand += (sizeof(char*) + 1) * st->translations;
+			
+			while( script->pos+expand >= script->size ) {
+				script->size += SCRIPT_BLOCK_SIZE;
+				RECREATE(script->buf,unsigned char,script->size);
+			}
+			
+			*((struct script_code_str **)(&script->buf[script->pos])) = sct;
+
+			script->pos += sizeof(char*);
+			
+			for(j = 0; j < st->translations; j++) {
+				*((uint8 *)(&script->buf[script->pos])) = RBUFB(st->buf, st_cursor);
+				*((char **)(&script->buf[script->pos+1])) = &st->buf[st_cursor + 1];
+				script->pos += sizeof(char*) + 1;
+				st_cursor += 1;
+				while(st->buf[st_cursor++]);
+			}
+		}
 		
-		if( script->lang_export_fp && !duplicate && script->syntax.last_func == script->buildin_mes_offset ) {
+		/* When exporting we don't know what is a translation and what isn't, we re-purpose syntax.strings */
+		if( script->lang_export_fp && my_idx ) {
+			if( !script->syntax.strings ) {
+				script->syntax.strings = strdb_alloc(DB_OPT_RELEASE_DATA, 0);
+			}
+			
+			if( !strdb_exists(script->syntax.strings,my_str) ) {
+				strdb_iput(script->syntax.strings, aStrdup(my_str), 1);
+				duplicate = false;
+			}
+		}
+		
+		//TODO other than mes_offset, perhaps add select,menu,message,dispbottom?
+		if( script->lang_export_fp && !duplicate && ((script->syntax.last_func == script->buildin_mes_offset && !script->syntax.nested_call) || script->syntax.lang_macro_active) ) {
 			char line[512] = { 0 };//TODO shouldn't use this, need reusable buffer
-			int k;
 			char *line_start = start_point;
 			char *line_end = start_point;
 
-			if( !script->syntax.first_entry ) {
-				fprintf(script->lang_export_fp,"\nNPC:%s //%s\n\n",
-						script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC",
-						script->parser_current_file ? script->parser_current_file : "Unknown File"
-				);
-				script->syntax.first_entry = true;
-			}
-			
 			while( line_start > script->parser_current_src ) {
 				if( *line_start != '\n' )
 					line_start--;
@@ -1245,7 +1296,17 @@ const char* parse_simpleexpr(const char *p)
 			
 			normalize_name(line, "\r\n\t ");
 			//fprintf(script->lang_export_fp,"\"%s\" = \"\" //%s\n",my_str,line);
-			fprintf(script->lang_export_fp,"\"%s\" = \"A %s\" //%s\n",my_str,my_str,line); //DEBUG
+			//fprintf(script->lang_export_fp,"\"%s\" = \"A %s\" //%s\n",my_str,my_str,line); //DEBUG
+			//TODO missing context
+			fprintf(script->lang_export_fp,"#: %s\n",script->parser_current_file ? script->parser_current_file : "Unknown File");
+			fprintf(script->lang_export_fp,"# %s\n",line);
+
+			fprintf(script->lang_export_fp,"msgctxt \"%s\"\n",
+					script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC"
+			);
+			fprintf(script->lang_export_fp,"msgid \"%s\"\n",my_str);
+			fprintf(script->lang_export_fp,"msgstr \"Translated %s\"\n",my_str);//DEBUG
+
 		}
 		
 	} else {
@@ -2322,6 +2383,8 @@ struct script_code* parse_script(const char *src,const char *file,int line,int o
 
 	memset(&script->syntax,0,sizeof(script->syntax));
 	script->syntax.last_func = -1;/* as valid values are >= 0 */
+	if( script->parser_current_npc_name )
+		script->syntax.translation_db = strdb_get(script->translation_db, script->parser_current_npc_name);
 
 	script->buf=(unsigned char *)aMalloc(SCRIPT_BLOCK_SIZE*sizeof(unsigned char));
 	script->pos=0;
@@ -4102,12 +4165,59 @@ void run_script_main(struct script_state *st) {
 				script->push_val(stack,c,0,NULL);
 				break;
 			case C_STR:
+				script->push_str(stack,C_CONSTSTR,(char*)(st->script->script_buf+st->pos));
+				while(st->script->script_buf[st->pos++]);
+				break;
+			case C_LSTR:
 			{
-				struct script_code_str *sct = (struct script_code_str*)(st->script->script_buf+st->pos);
-				//TODO I have no idea what this is going to do if someone passes "" (empty) as a param (TEST)
-				if( sct )
+				struct script_code_str *sct = *((struct script_code_str **)(&st->script->script_buf[st->pos]));
+				struct map_session_data *lsd = NULL;
+				ShowDebug("Triggered for '%s'\n",sct->ptr);
+				st->pos += (sizeof(char*)/* - 1*/);
+				
+				{
+					uint8 k;
+					int offset = st->pos;
+					
+					for(k = 0; k < sct->translations; k++) {
+						uint8 lang_id = *(uint8 *)(&st->script->script_buf[offset]);
+						offset += 1;
+						ShowDebug("- Found '%s'\n",*(char**)(&st->script->script_buf[offset]));
+						if( lang_id == 1 )
+							break;
+						offset += sizeof(char*);
+					}
+					
+					script->push_str(stack,C_CONSTSTR,
+									 ( k == sct->translations ) ? sct->ptr : *(char**)(&st->script->script_buf[offset]) );
+					
+				}
+				
+				st->pos += ( ( sizeof(char*) + 1 ) * sct->translations );
+
+				
+				break;//DEBUG
+				
+				if( !st->rid || !(lsd = map->id2sd(st->rid)) || !lsd->lang_id )
 					script->push_str(stack,C_CONSTSTR,sct->ptr);
-				st->pos += (sizeof(char*) - 1);
+				else {
+					uint8 k;
+					int offset = st->pos;
+					
+					for(k = 0; k < sct->translations; k++) {
+						uint8 lang_id = *(uint8 *)(st->script->script_buf+offset);
+						offset += 1;
+						if( lang_id == lsd->lang_id )
+							break;
+						offset += sizeof(char*);
+					}
+					
+					script->push_str(stack,C_CONSTSTR,
+									 ( k == sct->translations ) ? sct->ptr : *(char**)(&st->script->script_buf[offset]) );
+
+				}
+				
+				st->pos += ( ( sizeof(char*) + 1 ) * sct->translations );
 			}
 				break;
 			case C_FUNC:
@@ -4534,100 +4644,93 @@ void do_final_script(void) {
  **/
 void test_lp(void) {
 	char line[1024];
-	char entry[1024], new_entry[1024];//TODO shouldn't use this
 	FILE *fp;
-	size_t line_count = 0, translation_count = 0;
-	DBMap *npcname2translations, *current_db;// awful names
-	char current_npc_name[NAME_LENGTH*2+1] = { 0 };
-	size_t i, j;
+	char msgctxt[NAME_LENGTH*2+1] = { 0 };
+	char msgid[300] = { 0 };//Not really sure on the size here
+	char msgstr[300] = { 0 };//Not really sure on the size here
+	size_t i;
 	int64 start_tick = timer->gettick();
+	uint32 translation_count = 0;
+	uint8 lang_id = 1;//TODO
 	
 	if( !(fp = fopen("./lang_exported.txt","rb")) ) {
 		ShowError("failed to open '%s' for reading\n","./lang_exported.txt");
 		return;
 	}
 	
-	npcname2translations = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
-	/**
-	 * npcname2translations
-	 *		( npc_name -> translationDBMap )
-	 *		translationDBMap
-	 *				( original_string -> translation_string )
-	 **/
-	
 	while(fgets(line, sizeof(line), fp)) {
-		size_t len = strlen(line);
-		
-//		if( line_count >= 30 )//debug
-//			break;
+		size_t len = strlen(line), cursor = 0;
 		
 		if( len <= 1 )
 			continue;
 		
-		if( line[0] == '/' && line[1] == '/' )
+		if( line[0] == '#' )
 			continue;
 		
-		if( strncasecmp(line,"NPC:",4) == 0 ) {//TODO npc name format in the file is incorrect. (has ::stuff and all)
-			//ShowDebug("Found NPC: in '%s'\n",line);
-			
-			for(i = 4; i < len; i++) {
-				if( line[i] == '/' )
+		if( strncasecmp(line,"msgctxt \"", 9) == 0 ) {
+			for(i = 9; i < len - 2; i++) {
+				if( line[i] == '\\' && line[i+1] == '"' )
+					msgctxt[cursor] = '"';
+				else
+					msgctxt[cursor] = line[i];
+				if( ++cursor >= sizeof(msgctxt) - 1 )
 					break;
 			}
-			
-			if( i == len ) {
-				ShowError("Invalid format\n");
-			} else {
-				safestrncpy(current_npc_name, line + 4, i - 4);
-				normalize_name(current_npc_name, " ");
-				current_db = NULL;
-				//ShowInfo("Detected name: '%s'\n",current_npc_name);
-			}
-		} else if ( line[0] == '\"' ) {
-			for(i = 1; i < len - 6; i++) {
-				if( strncasecmp((char*)line+i,"\" = \"",5) == 0 ) { //This isn't 100% safe, need harunas parser wisdom
+			msgctxt[cursor] = '\0';
+		} else if ( strncasecmp(line, "msgid \"", 7) == 0 ) {
+			for(i = 7; i < len - 2; i++) {
+				if( line[i] == '\\' && line[i+1] == '"' )
+					msgid[cursor] = '"';
+				else
+					msgid[cursor] = line[i];
+				if( ++cursor >= sizeof(msgid) - 1 )
 					break;
-				}
 			}
-			
-			if( i == len - 6 ) {
-				ShowError("Invalid format: %s\n",line);
-			} else {
-				safestrncpy(entry, line + 1, i);
-				//ShowInfo("Detected Original: '%s'\n",entry);
-				
-				if( strncasecmp((char*)line+i+4, "\"\"", 2) == 0 ) {
-					;
-					//ShowDebug("no translation for this entry\n");
-				} else {
-					for(j = i + 5; j < len - 1; j++) {
-						if( strncasecmp((char*)line+j, "\" //", 4) == 0 ) {  //This isn't 100% safe, need harunas parser wisdom
-							break;
-						}
-					}
-					
-					if( j == len - 1 ) {
-						ShowError("Invalid format: %s\n",line);
-					} else {
-						safestrncpy(new_entry, line + i + 5, j - (i + 4) );
-						//ShowInfo("Detected Translation: '%s'\n",new_entry);
-						
-						if( !current_db ) {
-							current_db = strdb_alloc(DB_OPT_DUP_KEY, 0);
-							strdb_put(npcname2translations, current_npc_name, current_db);
-						}
-						
-						strdb_put(current_db, entry, aStrdup(new_entry));
-						translation_count++;
-					}
-				}
+			msgid[cursor] = '\0';
+		} else if ( len > 9 && line[9] != '"' && strncasecmp(line, "msgstr \"",8) == 0 ) {
+			for(i = 8; i < len - 2; i++) {
+				if( line[i] == '\\' && line[i+1] == '"' )
+					msgstr[cursor] = '"';
+				else
+					msgstr[cursor] = line[i];
+				if( ++cursor >= sizeof(msgstr) - 1 )
+					break;
 			}
+			msgstr[cursor] = '\0';
 		}
 		
-		line_count++;
+		if( msgctxt[0] && msgid[0] && msgstr[0] ) {
+			DBMap *string_db;
+			struct string_translation *st = NULL;
+			size_t msgstr_len = strlen(msgstr);
+			unsigned int inner_len = 1 + (uint32)msgstr_len + 1; //uint8 lang_id + msgstr_len + '\0'
+			
+			if( !( string_db = strdb_get(script->translation_db, msgctxt) ) ) {
+				string_db = strdb_alloc(DB_OPT_DUP_KEY, 0);
+				
+				strdb_put(script->translation_db, msgctxt, string_db);
+			}
+			
+			if( !(st = strdb_get(string_db, msgid) ) ) {
+				CREATE(st, struct string_translation, 1);
+				
+				strdb_put(string_db, msgid, st);
+			}
+			
+			RECREATE(st->buf, char, st->len + inner_len);
+			
+			WBUFB(st->buf, st->len) = lang_id;
+			safestrncpy((char*)WBUFP(st->buf, st->len + 1), msgstr, msgstr_len + 1);
+			
+			st->translations++;
+			st->len += inner_len;
+			
+			msgctxt[0] = msgid[0] = msgstr[0] = '\0';
+			translation_count++;
+		}
 	}
 	
-	ShowDebug("Debug npcname2translations entries: %u (within %u npcs)\n",(uint32)translation_count, db_size(npcname2translations));
+	ShowDebug("Debug npcname2translations entries: %u (within %u npcs)\n",translation_count, db_size(script->translation_db));
 	ShowDebug("Operation Performed in: %d\n",(int)(timer->gettick() - start_tick));
 	
 	fclose(fp);
@@ -4640,6 +4743,7 @@ void do_init_script(bool minimal) {
 	script->st_db = idb_alloc(DB_OPT_BASE);
 	script->userfunc_db = strdb_alloc(DB_OPT_DUP_KEY,0);
 	script->autobonus_db = strdb_alloc(DB_OPT_DUP_KEY,0);
+	script->translation_db = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
 
 	script->st_ers = ers_new(sizeof(struct script_state), "script.c::st_ers", ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
 	script->stack_ers = ers_new(sizeof(struct script_stack), "script.c::script_stack", ERS_OPT_NONE|ERS_OPT_FLEX_CHUNK);
@@ -4724,6 +4828,7 @@ const char *script_getfuncname(struct script_state *st) {
 ///
 /// mes "<message>";
 BUILDIN(mes) {
+	ShowDebug("mes = '%s'\n",script_getstr(st, 2));
 	TBL_PC* sd = script->rid2sd(st);
 	if( sd == NULL )
 		return true;
@@ -19245,6 +19350,11 @@ BUILDIN(channelmes)
 	return true;
 }
 
+/** place holder for the translation macro **/
+BUILDIN(_) {
+	return true;
+}
+
 // declarations that were supposed to be exported from npc_chat.c
 #ifdef PCRE_SUPPORT
 BUILDIN(defpattern);
@@ -19321,6 +19431,7 @@ bool script_add_builtin(const struct script_function *buildin, bool override) {
 		else if( strcmp(buildin->name, "callfunc") == 0 ) script->buildin_callfunc_ref = n;
 		else if( strcmp(buildin->name, "getelementofarray") == 0 ) script->buildin_getelementofarray_ref = n;
 		else if( strcmp(buildin->name, "mes") == 0 ) script->buildin_mes_offset = script->buildin_count;
+		else if( strcmp(buildin->name, "_") == 0 ) script->buildin_lang_macro_offset = script->buildin_count;
 
 		offset = script->buildin_count;
 
@@ -19873,6 +19984,7 @@ void script_parse_builtin(void) {
 		BUILDIN_DEF(shopcount, "i"),
 
 		BUILDIN_DEF(channelmes, "ss"),
+		BUILDIN_DEF(_,"s"),
 	};
 	int i, len = ARRAYLENGTH(BUILDIN);
 	RECREATE(script->buildin, char *, script->buildin_count + len); // Pre-alloc to speed up

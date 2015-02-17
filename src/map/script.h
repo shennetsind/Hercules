@@ -187,6 +187,7 @@ typedef enum c_op {
 	C_USERFUNC, // internal script function
 	C_USERFUNC_POS, // internal script function label
 	C_REF, // the next call to c_op2 should push back a ref to the left operand
+	C_LSTR, //Language Str (struct script_code_str)
 
 	// operators
 	C_OP3, // a ? b : c
@@ -466,8 +467,10 @@ struct script_syntax_data {
 	int curly_count; // The number of right brackets
 	int index; // Number of the syntax used in the script
 	int last_func; // buildin index of the last parsed function
+	unsigned int nested_call; //Dont really know what to call this
+	bool lang_macro_active;
 	DBMap *strings; // string map parsed (is later passed to script_code)
-	bool first_entry; // First time this npc is written to file? flag
+	DBMap *translation_db; //non-null if this npc has any translated strings to be linked
 };
 
 struct casecheck_data {
@@ -491,9 +494,13 @@ struct script_array {
 
 struct script_code_str {
 	char *ptr;
-	struct {
-		unsigned int translations : 1;
-	} flag;
+	uint8 translations;
+};
+
+struct string_translation {
+	uint8 translations;
+	unsigned int len;
+	char *buf;
 };
 
 /**
@@ -531,8 +538,8 @@ struct script_interface {
 	size_t word_size;
 	/* Script string storage */
 	char *string_list;
-	unsigned int string_list_size;
-	unsigned int string_list_pos;
+	int string_list_size;
+	int string_list_pos;
 	/*  */
 	unsigned short current_item_id;
 	/* */
@@ -585,6 +592,9 @@ struct script_interface {
 	char *parser_current_npc_name;
 	/* */
 	int buildin_mes_offset;
+	int buildin_lang_macro_offset;
+	/* */
+	DBMap *translation_db;/* npc_name => DBMap (strings) */
 	/*  */
 	void (*init) (bool minimal);
 	void (*final) (void);
