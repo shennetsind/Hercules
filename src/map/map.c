@@ -5825,14 +5825,11 @@ static CMDLINEARG(loadscript)
 /**
  * --generate-translations
  *
- * Creates "./exported_dialog.po"
+ * Creates "./generated_translations.po" unless file name/path is specified (--generate-translations=?)
  * @see cmdline->exec
  **/
 static CMDLINEARG(generatetranslations) {
-	if( params )
-		script->lang_export_file = aStrdup(params);
-	else
-		script->lang_export_file = aStrdup("./generated_translations.po");
+	script->lang_export_file = aStrdup("./generated_translations.po");
 	
 	if( !(script->lang_export_fp = fopen(script->lang_export_file,"wb")) ) {
 		ShowError("export-dialog: failed to open '%s' for writing\n",script->lang_export_file);
@@ -5858,7 +5855,7 @@ void cmdline_args_init_local(void)
 	CMDLINEARG_DEF2(log-config, logconfig, "Alternative logging configuration.", CMDLINE_OPT_NORMAL|CMDLINE_OPT_PARAM);
 	CMDLINEARG_DEF2(script-check, scriptcheck, "Doesn't run the server, only tests the scripts passed through --load-script.", CMDLINE_OPT_SILENT);
 	CMDLINEARG_DEF2(load-script, loadscript, "Loads an additional script (can be repeated).", CMDLINE_OPT_NORMAL|CMDLINE_OPT_PARAM);
-	CMDLINEARG_DEF2(generate-translations, generatetranslations, "Creates './generated_translations.po' file (unless a file name is specified) with all translateable strings from scripts, server terminates afterwards.", CMDLINE_OPT_NORMAL|CMDLINE_OPT_PARAM);
+	CMDLINEARG_DEF2(generate-translations, generatetranslations, "Creates './generated_translations.po' file with all translateable strings from scripts, server terminates afterwards.", CMDLINE_OPT_NORMAL);
 }
 
 int do_init(int argc, char *argv[])

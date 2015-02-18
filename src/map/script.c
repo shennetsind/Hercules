@@ -62,6 +62,8 @@
 	#include <sys/time.h>
 #endif
 
+struct script_interface script_s;
+
 static inline int GETVALUE(const unsigned char* buf, int i) {
 	return (int)MakeDWord(MakeWord(buf[i], buf[i+1]), MakeWord(buf[i+2], 0));
 }
@@ -71,7 +73,29 @@ static inline void SETVALUE(unsigned char* buf, int i, int n) {
 	buf[i+2] = GetByte(n, 2);
 }
 
-struct script_interface script_s;
+static inline void script_string_buf_ensure(struct script_string_buf *buf, size_t ensure) {
+	if( buf->pos+ensure >= buf->size ) {
+		do {
+			buf->size += 512;
+		} while ( buf->pos+ensure >= buf->size );
+		RECREATE(buf->ptr, char, buf->size);
+	}
+}
+
+static inline void script_string_buf_addb(struct script_string_buf *buf,uint8 b) {
+	if( buf->pos+1 >= buf->size ) {
+		buf->size += 512;
+		RECREATE(buf->ptr, char, buf->size);
+	}
+	
+	buf->ptr[buf->pos++] = b;
+}
+
+static inline void script_string_buf_destroy(struct script_string_buf *buf) {
+	if( buf->ptr )
+		aFree(buf->ptr);
+	memset(buf,0,sizeof(struct script_string_buf));
+}
 
 const char* script_op2name(int op) {
 #define RETURN_OP_NAME(type) case type: return #type
@@ -1178,12 +1202,10 @@ const char* parse_simpleexpr(const char *p)
 		script->addi((int)lli); // Cast is safe, as it's already been checked for overflows
 		p=np;
 	} else if(*p=='"') {
-		//Variable names are not final over here
-		char my_str[1024] = { 0 };//TODO Shouldnt' use this, get start address, end address and boom. need reusable buffer
-		int my_idx = 0, k;
 		struct string_translation *st = NULL;
 		char *start_point = (char*)p;
 		bool duplicate = true;
+		struct script_string_buf *sbuf = &script->parse_simpleexpr_str;
 		
 		do {
 			p++;
@@ -1195,14 +1217,12 @@ const char* parse_simpleexpr(const char *p)
 					if( n != 1 )
 						ShowDebug("parse_simpleexpr: unexpected length %d after unescape (\"%.*s\" -> %.*s)\n", (int)n, (int)len, p, (int)n, buf);
 					p += len;
-					if( my_idx < sizeof(my_str) - 1 )
-						my_str[my_idx++] = *buf;
+					script_string_buf_addb(sbuf, *buf);
 					continue;
 				} else if( *p == '\n' ) {
 					disp_error_message("parse_simpleexpr: unexpected newline @ string",p);
 				}
-				if( my_idx < sizeof(my_str) - 1 )
-					my_str[my_idx++] = *p++;
+				script_string_buf_addb(sbuf, *p++);
 			}
 			if(!*p)
 				disp_error_message("parse_simpleexpr: unexpected end of file @ string",p);
@@ -1210,11 +1230,21 @@ const char* parse_simpleexpr(const char *p)
 			p = script->skip_space(p);
 		} while( *p && *p == '"' );
 		
-		if( !(script->syntax.translation_db && (st = strdb_get(script->syntax.translation_db, my_str))) ) {
+		script_string_buf_addb(sbuf, 0);
+		
+		if( !(script->syntax.translation_db && (st = strdb_get(script->syntax.translation_db, sbuf->ptr))) ) {
 			script->addc(C_STR);
-			for(k = 0; k < my_idx; k++)
-				script->addb(my_str[k]);
-			script->addb(0);
+			
+			if( script->pos+sbuf->pos >= script->size ) {
+				do {
+					script->size += SCRIPT_BLOCK_SIZE;
+				} while( script->pos+sbuf->pos >= script->size );
+				RECREATE(script->buf,unsigned char,script->size);
+			}
+			
+			memcpy(script->buf+script->pos, sbuf->ptr, sbuf->pos);
+			script->pos += sbuf->pos;
+
 		} else {
 			int expand = 5;
 			unsigned char j;
@@ -1240,26 +1270,30 @@ const char* parse_simpleexpr(const char *p)
 				script->pos += sizeof(char*) + 1;
 				st_cursor += 1;
 				while(st->buf[st_cursor++]);
+				st_cursor += 1;
 			}
 		}
 		
 		/* When exporting we don't know what is a translation and what isn't */
-		if( script->lang_export_fp && my_idx ) {
+		if( script->lang_export_fp && sbuf->pos > 1 ) {//sbuf->pos will always be at least 1 because of the '\0'
 			if( !script->syntax.strings ) {
 				script->syntax.strings = strdb_alloc(DB_OPT_DUP_KEY|DB_OPT_ALLOW_NULL_DATA, 0);
 			}
 			
-			if( !strdb_exists(script->syntax.strings,my_str) ) {
-				strdb_put(script->syntax.strings, my_str, NULL);
+			if( !strdb_exists(script->syntax.strings,sbuf->ptr) ) {
+				strdb_put(script->syntax.strings, sbuf->ptr, NULL);
 				duplicate = false;
 			}
 		}
 		
-		//TODO other than mes_offset, perhaps add select,menu,message,dispbottom?
-		if( script->lang_export_fp && !duplicate && ((script->syntax.last_func == script->buildin_mes_offset && !script->syntax.nested_call) || script->syntax.lang_macro_active) ) {
-			char line[512] = { 0 };//TODO shouldn't use this, need reusable buffer
+		if( script->lang_export_fp && !duplicate &&
+			( ( ( script->syntax.last_func == script->buildin_mes_offset ||
+				 script->syntax.last_func == script->buildin_select_offset ) && !script->syntax.nested_call
+				) || script->syntax.lang_macro_active ) ) {
 			char *line_start = start_point;
 			char *line_end = start_point;
+			struct script_string_buf *lbuf = &script->lang_export_line_buf;
+			size_t line_length;
 
 			while( line_start > script->parser_current_src ) {
 				if( *line_start != '\n' )
@@ -1271,26 +1305,34 @@ const char* parse_simpleexpr(const char *p)
 			while( *line_end != '\n' && *line_end != '\0' )
 				line_end++;
 			
-			k = (int)(line_end - line_start);
-			if( k > sizeof(line) )
-				k = 511;
-			safestrncpy(line,line_start,k);
+			line_length = (size_t)(line_end - line_start);
 			
-			normalize_name(line, "\r\n\t ");
-			//fprintf(script->lang_export_fp,"\"%s\" = \"\" //%s\n",my_str,line);
-			//fprintf(script->lang_export_fp,"\"%s\" = \"A %s\" //%s\n",my_str,my_str,line); //DEBUG
-			//TODO missing context
-			fprintf(script->lang_export_fp,"#: %s\n",script->parser_current_file ? script->parser_current_file : "Unknown File");
-			fprintf(script->lang_export_fp,"# %s\n",line);
-
-			fprintf(script->lang_export_fp,"msgctxt \"%s\"\n",
-					script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC"
+			if( line_length > 0 ) {
+				script_string_buf_ensure(lbuf,line_length + 1);
+				
+				memcpy(lbuf->ptr, line_start, line_length);
+				lbuf->pos = line_length;
+				script_string_buf_addb(lbuf, 0);
+				
+				normalize_name(lbuf->ptr, "\r\n\t ");
+			}
+			
+			fprintf(script->lang_export_fp, "#: %s\n"
+											"# %s\n"
+											"msgctxt \"%s\"\n"
+											"msgid \"%s\"\n"
+											"msgstr \"Translated2 %s\"\n", //TODO/DEBUG (Remove Translated %s)
+					script->parser_current_file ? script->parser_current_file : "Unknown File",
+					lbuf->ptr,
+					script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC",
+					sbuf->ptr,
+					sbuf->ptr
 			);
-			fprintf(script->lang_export_fp,"msgid \"%s\"\n",my_str);
-			fprintf(script->lang_export_fp,"msgstr \"Translated %s\"\n",my_str);//DEBUG
-
+			
+			lbuf->pos = 0;
 		}
 		
+		sbuf->pos = 0;
 	} else {
 		int l;
 		const char* pv;
@@ -4607,11 +4649,10 @@ void do_final_script(void) {
 	
 	script->clear_translations(false);
 	
-	if( script->translation_db )
-		db_destroy(script->translation_db);
+	script->parser_clean_leftovers();
 	
-	if( script->syntax.strings ) /* used only when generating translation file */
-		db_destroy(script->syntax.strings);
+	if( script->lang_export_file )
+		aFree(script->lang_export_file);
 }
 
 /**
@@ -4636,6 +4677,7 @@ void script_load_translations(void) {
 	int i, size;
 	uint32 total = 0;
 	uint8 lang_id = 0;
+	int64 start_tick = timer->gettick();
 	
 	script->translation_db = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
 	
@@ -4699,6 +4741,8 @@ void script_load_translations(void) {
 		
 		dbi_destroy(main_iter);
 	}
+	
+	ShowDebug("translations loaded in: %d\n",(int32)(timer->gettick() - start_tick));
 }
 
 /**
@@ -4718,7 +4762,7 @@ char * script_get_translation_file_name(const char *file) {
 	if( last_bar != -1 || last_dot != -1 ) {
 		if( last_bar != -1 && last_dot < last_bar )
 			last_dot = -1;
-		safestrncpy(file_name, file+(last_bar >= 0 ? last_bar+1 : 0), ( last_dot >= 0 ? (len - last_bar) + last_dot - 1 : sizeof(file_name) ));
+		safestrncpy(file_name, file+(last_bar >= 0 ? last_bar+1 : 0), ( last_dot >= 0 ? ( last_bar >= 0 ? last_dot - last_bar : last_dot ) : sizeof(file_name) ));
 		return file_name;
 	}
 	
@@ -4732,11 +4776,10 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 	uint32 translations = 0;
 	char line[1024];
 	char msgctxt[NAME_LENGTH*2+1] = { 0 };
-	char msgid[300] = { 0 };//Not really sure on the size here
-	char msgstr[300] = { 0 };//Not really sure on the size here
 	DBMap *string_db;
 	size_t i;
 	FILE *fp;
+	struct script_string_buf msgid = { 0 }, msgstr = { 0 };
 	
 	if( !(fp = fopen(file,"rb")) ) {
 		ShowError("load_translation: failed to open '%s' for reading\n",file);
@@ -4756,9 +4799,10 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 		
 		if( strncasecmp(line,"msgctxt \"", 9) == 0 ) {
 			for(i = 9; i < len - 2; i++) {
-				if( line[i] == '\\' && line[i+1] == '"' )
+				if( line[i] == '\\' && line[i+1] == '"' ) {
 					msgctxt[cursor] = '"';
-				else
+					i++;
+				} else
 					msgctxt[cursor] = line[i];
 				if( ++cursor >= sizeof(msgctxt) - 1 )
 					break;
@@ -4766,29 +4810,27 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 			msgctxt[cursor] = '\0';
 		} else if ( strncasecmp(line, "msgid \"", 7) == 0 ) {
 			for(i = 7; i < len - 2; i++) {
-				if( line[i] == '\\' && line[i+1] == '"' )
-					msgid[cursor] = '"';
-				else
-					msgid[cursor] = line[i];
-				if( ++cursor >= sizeof(msgid) - 1 )
-					break;
+				if( line[i] == '\\' && line[i+1] == '"' ) {
+					script_string_buf_addb(&msgid, '"');
+					i++;
+				} else
+					script_string_buf_addb(&msgid, line[i]);
 			}
-			msgid[cursor] = '\0';
+			script_string_buf_addb(&msgid,0);
 		} else if ( len > 9 && line[9] != '"' && strncasecmp(line, "msgstr \"",8) == 0 ) {
 			for(i = 8; i < len - 2; i++) {
-				if( line[i] == '\\' && line[i+1] == '"' )
-					msgstr[cursor] = '"';
-				else
-					msgstr[cursor] = line[i];
-				if( ++cursor >= sizeof(msgstr) - 1 )
-					break;
+				if( line[i] == '\\' && line[i+1] == '"' ) {
+					script_string_buf_addb(&msgstr, '"');
+					i++;
+				} else
+					script_string_buf_addb(&msgstr, line[i]);
 			}
-			msgstr[cursor] = '\0';
+			script_string_buf_addb(&msgstr,0);
 		}
 		
-		if( msgctxt[0] && msgid[0] && msgstr[0] ) {
+		if( msgctxt[0] && msgid.pos > 1 && msgstr.pos > 1 ) {
 			struct string_translation *st = NULL;
-			size_t msgstr_len = strlen(msgstr);
+			size_t msgstr_len = msgstr.pos;
 			unsigned int inner_len = 1 + (uint32)msgstr_len + 1; //uint8 lang_id + msgstr_len + '\0'
 			
 			if( !( string_db = strdb_get(script->translation_db, msgctxt) ) ) {
@@ -4797,23 +4839,24 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 				strdb_put(script->translation_db, msgctxt, string_db);
 			}
 			
-			if( !(st = strdb_get(string_db, msgid) ) ) {
+			if( !(st = strdb_get(string_db, msgid.ptr) ) ) {
 				CREATE(st, struct string_translation, 1);
 				
-				st->string_id = script->string_dup(msgid);
+				st->string_id = script->string_dup(msgid.ptr);
 				
-				strdb_put(string_db, msgid, st);
+				strdb_put(string_db, msgid.ptr, st);
 			}
 			
 			RECREATE(st->buf, char, st->len + inner_len);
 			
 			WBUFB(st->buf, st->len) = lang_id;
-			safestrncpy((char*)WBUFP(st->buf, st->len + 1), msgstr, msgstr_len + 1);
+			safestrncpy((char*)WBUFP(st->buf, st->len + 1), msgstr.ptr, msgstr_len + 1);
 			
 			st->translations++;
 			st->len += inner_len;
 			
-			msgctxt[0] = msgid[0] = msgstr[0] = '\0';
+			msgctxt[0] /*= msgid[0] = msgstr[0]*/ = '\0';
+			msgid.pos = msgstr.pos = 0;
 			translations++;
 		}
 	}
@@ -4822,6 +4865,9 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 	
 	fclose(fp);
 	
+	script_string_buf_destroy(&msgid);
+	script_string_buf_destroy(&msgstr);
+
 	ShowStatus("Done reading '"CL_WHITE"%u"CL_RESET"' translations in '"CL_WHITE"%s"CL_RESET"'.\n", translations, file);
 }
 
@@ -4886,17 +4932,29 @@ int script_translation_db_destroyer(DBKey key, DBData *data, va_list ap) {
 }
 
 /**
- * Performs cleanup after all parsing is processed
+ *
  **/
-int script_parse_cleanup_timer(int tid, int64 tick, int id, intptr_t data) {
-	
+void script_parser_clean_leftovers(void) {
 	if( script->translation_db ) {
 		script->translation_db->destroy(script->translation_db,script->translation_db_destroyer);
 		script->translation_db = NULL;
 	}
 	
-	if( script->syntax.strings ) /* used only when generating translation file */
+	if( script->syntax.strings ) { /* used only when generating translation file */
 		db_destroy(script->syntax.strings);
+		script->syntax.strings = NULL;
+	}
+
+	script_string_buf_destroy(&script->parse_simpleexpr_str);
+	script_string_buf_destroy(&script->lang_export_line_buf);
+}
+
+/**
+ * Performs cleanup after all parsing is processed
+ **/
+int script_parse_cleanup_timer(int tid, int64 tick, int id, intptr_t data) {
+	
+	script->parser_clean_leftovers();
 
 	script->parse_cleanup_timer_id = INVALID_TIMER;
 	
@@ -4965,6 +5023,11 @@ int script_reload(void) {
 	db_clear(script->st_db);
 	
 	script->clear_translations(true);
+	
+	if( script->parse_cleanup_timer_id != INVALID_TIMER ) {
+		timer->delete(script->parse_cleanup_timer_id,script->parse_cleanup_timer);
+		script->parse_cleanup_timer_id = INVALID_TIMER;
+	}
 
 	mapreg->reload();
 
@@ -4999,7 +5062,6 @@ const char *script_getfuncname(struct script_state *st) {
 ///
 /// mes "<message>";
 BUILDIN(mes) {
-	ShowDebug("mes = '%s'\n",script_getstr(st, 2));
 	TBL_PC* sd = script->rid2sd(st);
 	if( sd == NULL )
 		return true;
@@ -19602,6 +19664,7 @@ bool script_add_builtin(const struct script_function *buildin, bool override) {
 		else if( strcmp(buildin->name, "callfunc") == 0 ) script->buildin_callfunc_ref = n;
 		else if( strcmp(buildin->name, "getelementofarray") == 0 ) script->buildin_getelementofarray_ref = n;
 		else if( strcmp(buildin->name, "mes") == 0 ) script->buildin_mes_offset = script->buildin_count;
+		else if( strcmp(buildin->name, "select") == 0 ) script->buildin_select_offset = script->buildin_count;
 		else if( strcmp(buildin->name, "_") == 0 ) script->buildin_lang_macro_offset = script->buildin_count;
 
 		offset = script->buildin_count;
@@ -20540,5 +20603,6 @@ void script_defaults(void) {
 	script->parse_cleanup_timer = script_parse_cleanup_timer;
 	script->add_language = script_add_language;
 	script->get_translation_file_name = script_get_translation_file_name;
+	script->parser_clean_leftovers = script_parser_clean_leftovers;
 	
 }

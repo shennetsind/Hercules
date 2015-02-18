@@ -491,9 +491,9 @@ struct script_array {
 	unsigned int *members;/* member list */
 };
 
-struct script_code_str {
+struct script_string_buf {
 	char *ptr;
-	uint8 translations;
+	size_t pos,size;
 };
 
 struct string_translation {
@@ -593,6 +593,7 @@ struct script_interface {
 	char *parser_current_npc_name;
 	/* */
 	int buildin_mes_offset;
+	int buildin_select_offset;
 	int buildin_lang_macro_offset;
 	/* */
 	DBMap *translation_db;/* npc_name => DBMap (strings) */
@@ -601,6 +602,9 @@ struct script_interface {
 	/* */
 	char **languages;
 	uint8 max_lang_id;
+	/* */
+	struct script_string_buf parse_simpleexpr_str;
+	struct script_string_buf lang_export_line_buf;
 	/* */
 	int parse_cleanup_timer_id;
 	/*  */
@@ -759,6 +763,7 @@ struct script_interface {
 	int (*parse_cleanup_timer) (int tid, int64 tick, int id, intptr_t data);
 	uint8 (*add_language) (char *name);
 	char *(*get_translation_file_name) (const char *file);
+	void (*parser_clean_leftovers) (void);
 };
 
 struct script_interface *script;
