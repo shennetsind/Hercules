@@ -4604,11 +4604,6 @@ int do_init_npc(bool minimal) {
 		npc->timer_event_ers = ers_new(sizeof(struct timer_event_data),"clif.c::timer_event_ers",ERS_OPT_NONE);
 
 		npc_process_files(START_NPC_NUM);
-		
-		if( script->lang_export_fp ) {
-			fclose(script->lang_export_fp);
-			script->lang_export_fp = NULL;
-		}
 	}
 	
 	if (!minimal) {
@@ -4626,6 +4621,11 @@ int do_init_npc(bool minimal) {
 
 		timer->add_func_list(npc->event_do_clock,"npc_event_do_clock");
 		timer->add_func_list(npc->timerevent,"npc_timerevent");
+	}
+	
+	if( script->lang_export_fp ) {
+		fclose(script->lang_export_fp);
+		script->lang_export_fp = NULL;
 	}
 
 	// Init dummy NPC

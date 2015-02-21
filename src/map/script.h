@@ -761,8 +761,8 @@ struct script_interface {
 	int (*translation_db_destroyer) (DBKey key, DBData *data, va_list ap);
 	void (*clear_translations) (bool reload);
 	int (*parse_cleanup_timer) (int tid, int64 tick, int id, intptr_t data);
-	uint8 (*add_language) (char *name);
-	char *(*get_translation_file_name) (const char *file);
+	uint8 (*add_language) (const char *name);
+	const char *(*get_translation_file_name) (const char *file);
 	void (*parser_clean_leftovers) (void);
 };
 

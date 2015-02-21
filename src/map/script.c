@@ -911,6 +911,9 @@ const char* parse_callfunc(const char* p, int require_paren, int is_custom)
 	if( nested_call )
 		script->syntax.nested_call--;
 	
+	if( !script->syntax.nested_call )
+		script->syntax.last_func = -1;
+	
 	if( !macro )
 		script->addc(C_FUNC);
 	return p;
@@ -1148,8 +1151,7 @@ int script_string_dup(char *str) {
 	int pos = script->string_list_pos;
  
 	while( pos+len+1 >= script->string_list_size ) {
-		int increments = (1024*1024)/2;
-		script->string_list_size += increments;
+		script->string_list_size += (1024*1024)/2;
 		RECREATE(script->string_list,char,script->string_list_size);
 	}
 	
@@ -1203,7 +1205,7 @@ const char* parse_simpleexpr(const char *p)
 		p=np;
 	} else if(*p=='"') {
 		struct string_translation *st = NULL;
-		char *start_point = (char*)p;
+		const char *start_point = p;
 		bool duplicate = true;
 		struct script_string_buf *sbuf = &script->parse_simpleexpr_str;
 		
@@ -1262,7 +1264,7 @@ const char* parse_simpleexpr(const char *p)
 			*((int *)(&script->buf[script->pos])) = st->string_id;
 			*((uint8 *)(&script->buf[script->pos + 4])) = st->translations;
 
-			script->pos += 5;
+			script->pos += sizeof(int) + sizeof(uint8);
 			
 			for(j = 0; j < st->translations; j++) {
 				*((uint8 *)(&script->buf[script->pos])) = RBUFB(st->buf, st_cursor);
@@ -1290,8 +1292,8 @@ const char* parse_simpleexpr(const char *p)
 			( ( ( script->syntax.last_func == script->buildin_mes_offset ||
 				 script->syntax.last_func == script->buildin_select_offset ) && !script->syntax.nested_call
 				) || script->syntax.lang_macro_active ) ) {
-			char *line_start = start_point;
-			char *line_end = start_point;
+			const char *line_start = start_point;
+			const char *line_end = start_point;
 			struct script_string_buf *lbuf = &script->lang_export_line_buf;
 			size_t line_length;
 
@@ -1512,8 +1514,6 @@ const char* parse_line(const char* p)
 	} else {
 		if( *p != ';' )
 			disp_error_message("parse_line: need ';'",p);
-		/* we set it back after a semi colon so that we can know when concat'd stuff ends */
-		script->syntax.last_func = -1;
 	}
 
 	//Binding decision for if(), for(), while()
@@ -4206,7 +4206,7 @@ void run_script_main(struct script_state *st) {
 				uint8 translations = *((uint8 *)(&st->script->script_buf[st->pos+4]));
 				struct map_session_data *lsd = NULL;
 				
-				st->pos += 5;
+				st->pos += sizeof(int) + sizeof(uint8);
 				
 				if( !st->rid || !(lsd = map->id2sd(st->rid)) || !lsd->lang_id )
 					script->push_str(stack,C_CONSTSTR,script->string_list+string_id);
@@ -4658,7 +4658,7 @@ void do_final_script(void) {
 /**
  *
  **/
-uint8 script_add_language(char *name) {
+uint8 script_add_language(const char *name) {
 	uint8 lang_id = script->max_lang_id;
 	
 	RECREATE(script->languages, char *, ++script->max_lang_id);
@@ -4677,7 +4677,6 @@ void script_load_translations(void) {
 	int i, size;
 	uint32 total = 0;
 	uint8 lang_id = 0;
-	int64 start_tick = timer->gettick();
 	
 	script->translation_db = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
 	
@@ -4741,14 +4740,12 @@ void script_load_translations(void) {
 		
 		dbi_destroy(main_iter);
 	}
-	
-	ShowDebug("translations loaded in: %d\n",(int32)(timer->gettick() - start_tick));
 }
 
 /**
  *
  **/
-char * script_get_translation_file_name(const char *file) {
+const char * script_get_translation_file_name(const char *file) {
 	static char file_name[200];
 	int i, len = (int)strlen(file), last_bar = -1, last_dot = -1;
 	
@@ -4766,7 +4763,7 @@ char * script_get_translation_file_name(const char *file) {
 		return file_name;
 	}
 	
-	return (char*)file;
+	return file;
 }
 
 /**
