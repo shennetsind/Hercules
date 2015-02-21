@@ -1175,17 +1175,17 @@ void run_tomb(struct map_session_data* sd, struct npc_data* nd) {
 	strftime(time, sizeof(time), "%H:%M", localtime(&nd->u.tomb.kill_time));
 
 	// TODO: Find exact color?
-	snprintf(buffer, sizeof(buffer), msg_txt(857), nd->u.tomb.md->db->name); // "[ ^EE0000%s^000000 ]"
+	snprintf(buffer, sizeof(buffer), msg_sd(sd,857), nd->u.tomb.md->db->name); // "[ ^EE0000%s^000000 ]"
 	clif->scriptmes(sd, nd->bl.id, buffer);
 
-	clif->scriptmes(sd, nd->bl.id, msg_txt(858)); // "Has met its demise"
+	clif->scriptmes(sd, nd->bl.id, msg_sd(sd,858)); // "Has met its demise"
 
-	snprintf(buffer, sizeof(buffer), msg_txt(859), time); // "Time of death : ^EE0000%s^000000"
+	snprintf(buffer, sizeof(buffer), msg_sd(sd,859), time); // "Time of death : ^EE0000%s^000000"
 	clif->scriptmes(sd, nd->bl.id, buffer);
 
-	clif->scriptmes(sd, nd->bl.id, msg_txt(860)); // "Defeated by"
+	clif->scriptmes(sd, nd->bl.id, msg_sd(sd,860)); // "Defeated by"
 
-	snprintf(buffer, sizeof(buffer), msg_txt(861), nd->u.tomb.killer_name[0] ? nd->u.tomb.killer_name : msg_txt(15)); // "[^EE0000%s^000000]" / "Unknown"
+	snprintf(buffer, sizeof(buffer), msg_sd(sd,861), nd->u.tomb.killer_name[0] ? nd->u.tomb.killer_name : msg_sd(sd,15)); // "[^EE0000%s^000000]" / "Unknown"
 	clif->scriptmes(sd, nd->bl.id, buffer);
 
 	clif->scriptclose(sd, nd->bl.id);
@@ -1566,7 +1566,7 @@ bool npc_trader_open(struct map_session_data *sd, struct npc_data *nd) {
 			
 				/* nothing to display, no items available */
 				if( i == nd->u.scr.shop->items ) {
-					clif->colormes(sd->fd,COLOR_RED, msg_txt(881));
+					clif->colormes(sd->fd,COLOR_RED, msg_sd(sd,881));
 					return false;
 				}
 

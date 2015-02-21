@@ -4784,6 +4784,8 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 	}
 	
 	script->add_language(script->get_translation_file_name(file));
+	if( lang_id >= atcommand->max_message_table )
+		atcommand->expand_message_table();
 	
 	while(fgets(line, sizeof(line), fp)) {
 		size_t len = strlen(line), cursor = 0;
@@ -4826,33 +4828,50 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 		}
 		
 		if( msgctxt[0] && msgid.pos > 1 && msgstr.pos > 1 ) {
-			struct string_translation *st = NULL;
 			size_t msgstr_len = msgstr.pos;
 			unsigned int inner_len = 1 + (uint32)msgstr_len + 1; //uint8 lang_id + msgstr_len + '\0'
 			
-			if( !( string_db = strdb_get(script->translation_db, msgctxt) ) ) {
-				string_db = strdb_alloc(DB_OPT_DUP_KEY, 0);
+			if( strcasecmp(msgctxt, "messages.conf") == 0 ) {
+				int k;
 				
-				strdb_put(script->translation_db, msgctxt, string_db);
+				for(k = 0; k < MAX_MSG; k++) {
+					if( atcommand->msg_table[0][k] && strcmpi(atcommand->msg_table[0][k],msgid.ptr) == 0 ) {
+						if( atcommand->msg_table[lang_id][k] )
+							aFree(atcommand->msg_table[lang_id][k]);
+						atcommand->msg_table[lang_id][k] = aStrdup(msgstr.ptr);
+						break;
+					}
+				}
+				
+				if( k == MAX_MSG )//DEBUG
+					ShowWarning("load_translation:%s: unused entry '%s' for messages.conf detected\n",file,msgid.ptr);
+			} else {
+				struct string_translation *st = NULL;
+
+				if( !( string_db = strdb_get(script->translation_db, msgctxt) ) ) {
+					string_db = strdb_alloc(DB_OPT_DUP_KEY, 0);
+					
+					strdb_put(script->translation_db, msgctxt, string_db);
+				}
+				
+				if( !(st = strdb_get(string_db, msgid.ptr) ) ) {
+					CREATE(st, struct string_translation, 1);
+					
+					st->string_id = script->string_dup(msgid.ptr);
+					
+					strdb_put(string_db, msgid.ptr, st);
+				}
+				
+				RECREATE(st->buf, char, st->len + inner_len);
+				
+				WBUFB(st->buf, st->len) = lang_id;
+				safestrncpy((char*)WBUFP(st->buf, st->len + 1), msgstr.ptr, msgstr_len + 1);
+				
+				st->translations++;
+				st->len += inner_len;
 			}
 			
-			if( !(st = strdb_get(string_db, msgid.ptr) ) ) {
-				CREATE(st, struct string_translation, 1);
-				
-				st->string_id = script->string_dup(msgid.ptr);
-				
-				strdb_put(string_db, msgid.ptr, st);
-			}
-			
-			RECREATE(st->buf, char, st->len + inner_len);
-			
-			WBUFB(st->buf, st->len) = lang_id;
-			safestrncpy((char*)WBUFP(st->buf, st->len + 1), msgstr.ptr, msgstr_len + 1);
-			
-			st->translations++;
-			st->len += inner_len;
-			
-			msgctxt[0] /*= msgid[0] = msgstr[0]*/ = '\0';
+			msgctxt[0] = '\0';
 			msgid.pos = msgstr.pos = 0;
 			translations++;
 		}
@@ -13522,7 +13541,7 @@ BUILDIN(recovery)
 			status->revive(&sd->bl, 100, 100);
 		else
 			status_percent_heal(&sd->bl, 100, 100);
-		clif->message(sd->fd,msg_txt(880)); // "You have been recovered!"
+		clif->message(sd->fd,msg_sd(sd,880)); // "You have been recovered!"
 	}
 	mapit->free(iter);
 	return true;
@@ -18669,16 +18688,16 @@ BUILDIN(montransform) {
 			return true;
 
 		if( battle_config.mon_trans_disable_in_gvg && map_flag_gvg2(sd->bl.m) ) {
-			clif->message(sd->fd, msg_txt(1488)); // Transforming into monster is not allowed in Guild Wars.
+			clif->message(sd->fd, msg_sd(sd,1488)); // Transforming into monster is not allowed in Guild Wars.
 			return true;
 		}
 
 		if( sd->disguise != -1 ) {
-			clif->message(sd->fd, msg_txt(1486)); // Cannot transform into monster while in disguise.
+			clif->message(sd->fd, msg_sd(sd,1486)); // Cannot transform into monster while in disguise.
 			return true;
 		}
 
-		sprintf(msg, msg_txt(1485), monster->name); // Traaaansformation-!! %s form!!
+		sprintf(msg, msg_sd(sd,1485), monster->name); // Traaaansformation-!! %s form!!
 		clif->ShowScript(&sd->bl, msg);
 		status_change_end(bl, SC_MONSTER_TRANSFORM, INVALID_TIMER); // Clear previous
 		sc_start2(NULL, bl, SC_MONSTER_TRANSFORM, 100, mob_id, type, tick);
