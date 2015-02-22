@@ -95,9 +95,13 @@ const char* atcommand_msgfd(int fd, int msg_number) {
 // Return the message string of the specified number by [Yor]
 //-----------------------------------------------------------
 const char* atcommand_msg(int msg_number) {
-	if (msg_number >= 0 && msg_number < MAX_MSG &&
-	    atcommand->msg_table[0][msg_number] != NULL && atcommand->msg_table[0][msg_number][0] != '\0')
-		return atcommand->msg_table[0][msg_number];
+	if (msg_number >= 0 && msg_number < MAX_MSG) {
+	    if(atcommand->msg_table[map->default_lang_id][msg_number] != NULL && atcommand->msg_table[map->default_lang_id][msg_number][0] != '\0')
+			return atcommand->msg_table[map->default_lang_id][msg_number];
+		
+		if(atcommand->msg_table[0][msg_number] != NULL && atcommand->msg_table[0][msg_number][0] != '\0')
+			return atcommand->msg_table[0][msg_number];
+	}
 
 	return "??";
 }

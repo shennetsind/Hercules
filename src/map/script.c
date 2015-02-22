@@ -1248,13 +1248,13 @@ const char* parse_simpleexpr(const char *p)
 			script->pos += sbuf->pos;
 
 		} else {
-			int expand = 5;
+			int expand = sizeof(int) + sizeof(uint8);
 			unsigned char j;
 			unsigned int st_cursor = 0;
 
 			script->addc(C_LSTR);
 		
-			expand += (sizeof(char*) + 1) * st->translations;
+			expand += (sizeof(char*) + sizeof(uint8)) * st->translations;
 			
 			while( script->pos+expand >= script->size ) {
 				script->size += SCRIPT_BLOCK_SIZE;
@@ -1262,17 +1262,17 @@ const char* parse_simpleexpr(const char *p)
 			}
 			
 			*((int *)(&script->buf[script->pos])) = st->string_id;
-			*((uint8 *)(&script->buf[script->pos + 4])) = st->translations;
+			*((uint8 *)(&script->buf[script->pos + sizeof(int)])) = st->translations;
 
 			script->pos += sizeof(int) + sizeof(uint8);
 			
 			for(j = 0; j < st->translations; j++) {
 				*((uint8 *)(&script->buf[script->pos])) = RBUFB(st->buf, st_cursor);
-				*((char **)(&script->buf[script->pos+1])) = &st->buf[st_cursor + 1];
-				script->pos += sizeof(char*) + 1;
-				st_cursor += 1;
+				*((char **)(&script->buf[script->pos+sizeof(uint8)])) = &st->buf[st_cursor + sizeof(uint8)];
+				script->pos += sizeof(char*) + sizeof(uint8);
+				st_cursor += sizeof(uint8);
 				while(st->buf[st_cursor++]);
-				st_cursor += 1;
+				st_cursor += sizeof(uint8);
 			}
 		}
 		
@@ -4203,21 +4203,21 @@ void run_script_main(struct script_state *st) {
 			case C_LSTR:
 			{
 				int string_id = *((int *)(&st->script->script_buf[st->pos]));
-				uint8 translations = *((uint8 *)(&st->script->script_buf[st->pos+4]));
+				uint8 translations = *((uint8 *)(&st->script->script_buf[st->pos+sizeof(int)]));
 				struct map_session_data *lsd = NULL;
 				
 				st->pos += sizeof(int) + sizeof(uint8);
 				
-				if( !st->rid || !(lsd = map->id2sd(st->rid)) || !lsd->lang_id )
+				if( (!st->rid || !(lsd = map->id2sd(st->rid)) || !lsd->lang_id) && !map->default_lang_id )
 					script->push_str(stack,C_CONSTSTR,script->string_list+string_id);
 				else {
-					uint8 k;
+					uint8 k, wlang_id = lsd ? lsd->lang_id : map->default_lang_id;
 					int offset = st->pos;
 					
 					for(k = 0; k < translations; k++) {
 						uint8 lang_id = *(uint8 *)(&st->script->script_buf[offset]);
-						offset += 1;
-						if( lang_id == lsd->lang_id )
+						offset += sizeof(uint8);
+						if( lang_id == wlang_id )
 							break;
 						offset += sizeof(char*);
 					}
@@ -4227,7 +4227,7 @@ void run_script_main(struct script_state *st) {
 					
 				}
 				
-				st->pos += ( ( sizeof(char*) + 1 ) * translations );
+				st->pos += ( ( sizeof(char*) + sizeof(uint8) ) * translations );
 			}
 				break;
 			case C_FUNC:
@@ -4676,7 +4676,7 @@ void script_load_translations(void) {
 	config_setting_t *translations = NULL;
 	int i, size;
 	uint32 total = 0;
-	uint8 lang_id = 0;
+	uint8 lang_id = 0, k;
 	
 	script->translation_db = strdb_alloc(DB_OPT_DUP_KEY, NAME_LENGTH*2+1);
 	
@@ -4739,6 +4739,19 @@ void script_load_translations(void) {
 		}
 		
 		dbi_destroy(main_iter);
+	}
+	
+	for(k = 0; k < script->max_lang_id; k++) {
+		if( !strcmpi(script->languages[k],map->default_lang_str) ) {
+			break;
+		}
+	}
+	
+	if( k == script->max_lang_id ) {
+		ShowError("load_translations: map server default_language setting '%s' is not a loaded language\n",map->default_lang_str);
+		map->default_lang_id = 0;
+	} else {
+		map->default_lang_id = k;
 	}
 }
 
