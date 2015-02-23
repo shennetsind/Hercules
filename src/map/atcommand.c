@@ -162,9 +162,8 @@ bool msg_config_read(const char *cfg_name, bool allow_override) {
 				if( atcommand->msg_table[0][i] != NULL ) {
 					fprintf(script->lang_export_fp, "msgctxt \"messages.conf\"\n"
 							"msgid \"%s\"\n"
-							"msgstr \"Translated %s\"\n", //TODO/DEBUG (Remove Translated %s)
-							atcommand->msg_table[0][i],
-							atcommand->msg_table[0][i] //TODO DEBUG
+							"msgstr \"\"\n",
+							atcommand->msg_table[0][i]
 							);
 				}
 			}

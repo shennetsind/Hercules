@@ -1323,11 +1323,10 @@ const char* parse_simpleexpr(const char *p)
 											"# %s\n"
 											"msgctxt \"%s\"\n"
 											"msgid \"%s\"\n"
-											"msgstr \"Translated2 %s\"\n", //TODO/DEBUG (Remove Translated %s)
+											"msgstr \"\"\n",
 					script->parser_current_file ? script->parser_current_file : "Unknown File",
 					lbuf->ptr,
 					script->parser_current_npc_name ? script->parser_current_npc_name : "Unknown NPC",
-					sbuf->ptr,
 					sbuf->ptr
 			);
 			
@@ -4855,9 +4854,7 @@ void script_load_translation(const char *file, uint8 lang_id, uint32 *total) {
 						break;
 					}
 				}
-				
-				if( k == MAX_MSG )//DEBUG
-					ShowWarning("load_translation:%s: unused entry '%s' for messages.conf detected\n",file,msgid.ptr);
+
 			} else {
 				struct string_translation *st = NULL;
 
